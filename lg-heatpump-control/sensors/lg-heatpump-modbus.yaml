@@ -1,93 +1,180 @@
+# Captive portal for fallback
+captive_portal:
+
+# Web server for debugging
+web_server:
+  port: 80
+
+# UART for RS485
+uart:
+  id: rs485
+  tx_pin: GPIO3
+  rx_pin: GPIO1
+  baud_rate: 9600
+  stop_bits: 1
+  parity: NONE
+
+# Modbus configuration
 modbus:
   id: modbus_lg
-  uart_id: uart_modbus
-  flow_control_pin: GPIO5
-  send_wait_time: 200ms
-  
-uart:
-  tx_pin: GPIO17
-  rx_pin: GPIO16
-  baud_rate: 9600
-  id: uart_modbus
-  parity: none
-  data_bits: 8
-  stop_bits: 1
+  send_wait_time: 1000ms
 
 modbus_controller:
   - id: lg
-    address: 0x1 # the Modbus device addr
+    address: 0x1
     modbus_id: modbus_lg
-    update_interval: 30s
     setup_priority: -10
+    update_interval: 10s
+
+
+button:
+  - platform: restart
+    id: restart_button
+    name: "Рестарт ESP module"
+
+
+globals:
+  - id: stooklijn_target
+    type: float
+    restore_value: yes
+    initial_value: '28'
+  - id: force_update_stooklijn
+    type: bool
+    restore_value: no
+    initial_value: 'true'
+
+
+number:
+
+# допълнителна корекция на температурата на подаване спрямо нормалната отоплителна крива
+  - platform: template
+    name: "Топлинен offset"
+    id: wp_stooklijn_offset
+    min_value: -4
+    max_value: 4
+    initial_value: 0
+    step: 1
+    restore_value: yes
+    unit_of_measurement: "°C"
+    optimistic: true
+    set_action:
+      then:
+        - lambda: |-
+            id(force_update_stooklijn) = true;
+
+
+  - platform: modbus_controller
+    modbus_controller_id: lg
+    id: doel_temp_setpoint
+    name: "Настройка на целева температура"
+    register_type: holding
+    address: 2
+    value_type: U_WORD
+    unit_of_measurement: "°C"
+    multiply: 10
+    min_value: 30
+    max_value: 50
+    step: 1
+    write_lambda: |-
+      // При запис умножаваме по 10 за да пишем правилната стойност в Modbus
+      return (uint16_t)(x * 10);
+
+
+#  отоплителна крива (връзка между външна температура и желана температура на подаване).
+  - platform: template
+    name: "Отместване на линията"
+    id: overshoot_stooklijn_offset
+    internal: true  
+    min_value: -4
+    max_value: 4
+    initial_value: 0
+    step: 1
+    restore_value: yes
+    unit_of_measurement: "°C"
+    optimistic: true
+    set_action:
+      then:
+        - lambda: |-
+            id(force_update_stooklijn) = true;
+
+  - platform: template
+    id: oat_silent_always_off
+    name: "Безшумно изкл на външната температура"
+    min_value: 0
+    max_value: 10
+    step: 1
+    restore_value: yes
+    initial_value: 2
+    unit_of_measurement: "°C"
+    optimistic: true
+    icon: mdi:volume-plus
+
 
 switch:
-  - platform: modbus_controller
-    name: "SWW On/Off"
-    modbus_controller_id: lg
-    id: sww_on_off
-    register_type: coil
-    address: 1
-    icon: mdi:shower-head
-  - platform: modbus_controller
-    name: "Silent Mode"
-    modbus_controller_id: lg
+  
+  - platform: output
+    name: "Тих режим"
     id: silent_mode_switch
+    output: 'modbus_set_silent_mode'
+    icon: mdi:volume-off
+
+  - platform: modbus_controller
+    modbus_controller_id: lg
+    id: enable_disable_switch
+    name: "On/Off Термопомпа"
+    register_type: coil
+    address: 0
+    icon: mdi:heat-pump-outline
+    disabled_by_default: False
+    restore_mode: ALWAYS_ON
+
+  - platform: template
+    id: stooklijn_on_off
+    name: "отоп. крива според вън.темп. On/Off"
+    optimistic: true
+    icon: mdi:chart-bell-curve-cumulative
+
+  - platform: template
+    id: overshootcontrol_on_off
+    name: "Точност на зададената темп. On/Off"
+    optimistic: true
+    icon: mdi:rocket
+
+output:
+
+  - platform: modbus_controller
+    modbus_controller_id: lg
+    id: modbus_set_silent_mode
     register_type: coil
     address: 2
-    icon: mdi:volume-off
-  
+
+
 binary_sensor:
   - platform: modbus_controller
     modbus_controller_id: lg
-    name: "Pump Running"
+    name: "Водна помпа"
     id: pump_running
     register_type: discrete_input
+    skip_updates: 3
     address: 1
-    icon: mdi:pump
-#not needed for the controller, but added to optimise modbus communication
+
   - platform: modbus_controller
     modbus_controller_id: lg
-    name: "External Pump Running"
-    id: external_pump_running
-    register_type: discrete_input
-    address: 2
-    icon: mdi:pump
-  - platform: modbus_controller
-    modbus_controller_id: lg
-    name: "Compressor Running"
+    name: "Компресор"
     id: compressor_running
     register_type: discrete_input
+    skip_updates: 3
     address: 3
-    icon: mdi:car-turbocharger
+
   - platform: modbus_controller
     modbus_controller_id: lg
-    name: "Defrosting"
+    name: "Размразяване"
     id: defrosting
     register_type: discrete_input
+    skip_updates: 3
     address: 4
-    icon: mdi:snowflake-melt
-  - platform: modbus_controller
-    modbus_controller_id: lg
-    name: "SWW Heating"
-    id: sww_heating
-    register_type: discrete_input
-    address: 5
-    icon: mdi:shower-head
-#not needed for the controller, but added to optimise modbus communication
-  - platform: modbus_controller
-    modbus_controller_id: lg
-    name: "Boiler disinfection"
-    id: boiler_disinfection
-    register_type: discrete_input
-    address: 6
-    icon: mdi:pump
-  - platform: modbus_controller
-    modbus_controller_id: lg
-    name: "Silent Mode"
-    id: silent_mode_state
-    register_type: discrete_input
-    address: 7
-    icon: mdi:volume-off
+
+
 
 sensor:
   - platform: modbus_controller
@@ -98,17 +185,10 @@ sensor:
     address: 0
     value_type: U_WORD
     icon: mdi:alert-octagon
+
   - platform: modbus_controller
     modbus_controller_id: lg
-    name: "Bedrijfsmodus"
-    id: bedrijfsmodus
-    register_type: read
-    address: 1
-    value_type: U_WORD
-    icon: mdi:information-outline
-  - platform: modbus_controller
-    modbus_controller_id: lg
-    name: "Water retour"
+    name: "Входна вода"
     id: water_temp_retour
     register_type: read
     address: 2
@@ -122,7 +202,7 @@ sensor:
     icon: mdi:thermometer-chevron-down
   - platform: modbus_controller
     modbus_controller_id: lg
-    name: "Water aanvoer"
+    name: "Изходяща вода"
     id: water_temp_aanvoer
     register_type: read
     address: 3
@@ -137,33 +217,14 @@ sensor:
     icon: mdi:thermometer-chevron-up
   - platform: modbus_controller
     modbus_controller_id: lg
-    name: "SWW Temperatuur"
-    id: sww_temp
+    id: bedrijfsmodus
     register_type: read
-    address: 5
-    register_count: 2
-    device_class: "temperature"
-    unit_of_measurement: "°C"
-    state_class: "measurement"
+    address: 1
     value_type: U_WORD
-    accuracy_decimals: 1
-    filters:
-      - multiply: 0.1
-    icon: mdi:thermometer-water
-  - platform: template
-    name: "Rounded SWW Temperature"
-    id: rounded_sww_temp
-    device_class: "temperature"
-    unit_of_measurement: "°C"
-    state_class: "measurement"
-    accuracy_decimals: 1
-    lambda: |-
-      return (float)(floor((id(sww_temp).state*2)+0.5)/2);
-    update_interval: 30s
-    icon: mdi:thermometer-water
+  
   - platform: modbus_controller
     modbus_controller_id: lg
-    name: "Garagetemperatuur"
+    name: "температурата на стаята"
     id: binnen_temp
     register_type: read
     address: 7
@@ -180,7 +241,7 @@ sensor:
     name: "Flow Rate"
     id: current_flow_rate
     register_type: read
-    address: 8
+    address: 16
     register_count: 4
     device_class: "water"
     state_class: "measurement"
@@ -195,11 +256,10 @@ sensor:
     icon: mdi:waves-arrow-right
   - platform: modbus_controller
     modbus_controller_id: lg
-    name: "Buitentemperatuur"
+    name: "Външна температура"
     id: buiten_temp
     register_type: read
     address: 12
-#    register_count: 4
     device_class: "temperature"
     unit_of_measurement: "°C"
     state_class: "measurement"
@@ -211,30 +271,10 @@ sensor:
       - sliding_window_moving_average:
           window_size: 60
           send_every: 30
-  - platform: template
-    name: "Filtered OAT"
-    id: filtered_oat
-    device_class: "temperature"
-    unit_of_measurement: "°C"
-    state_class: "measurement"
-    accuracy_decimals: 1
-    lambda: |-
-      static float prev_oat = -100.0;
-      float new_oat = floor(id(buiten_temp).state);
-      if(new_oat - prev_oat > 0.5) {
-        fsm.update_stooklijn();
-        prev_oat = new_oat;
-      }
-      return new_oat;
-    update_interval: 60s
-    filters:
-      - or:
-        - throttle: 90min
-        - delta: 2.0
-    icon: mdi:weather-cloudy
+  
   - platform: modbus_controller
     modbus_controller_id: lg
-    name: "Pipe in Temp"
+    name: "темп. на входен фреон"
     id: temp16
     register_type: read
     address: 16
@@ -247,7 +287,7 @@ sensor:
       - multiply: 0.1
   - platform: modbus_controller
     modbus_controller_id: lg
-    name: "Pipe Out Temp"
+    name: "темп. на изход фреон"
     id: temp17
     register_type: read
     address: 17
@@ -309,7 +349,9 @@ sensor:
     accuracy_decimals: 0
     device_class: "pressure"
     state_class: "measurement"
-    unit_of_measurement: "mbar"
+    unit_of_measurement: "bar"
+    filters:
+      - multiply: 0.01
     icon: mdi:meter-electric-outline
   - platform: modbus_controller
     modbus_controller_id: lg
@@ -321,7 +363,9 @@ sensor:
     accuracy_decimals: 0
     device_class: "pressure"
     state_class: "measurement"
-    unit_of_measurement: "mbar"
+    unit_of_measurement: "bar"
+    filters:
+      - multiply: 0.01
   - platform: modbus_controller
     modbus_controller_id: lg
     name: "Compressor Hz"
@@ -336,7 +380,7 @@ sensor:
     icon: mdi:car-turbocharger
   - platform: modbus_controller
     modbus_controller_id: lg
-    name: "Doeltemperatuur"
+    name: "Целева температура"
     id: doel_temp
     register_type: holding
     address: 2
@@ -351,7 +395,7 @@ sensor:
     icon: mdi:home-thermometer-outline
   - platform: modbus_controller
     modbus_controller_id: lg
-    name: "SWW Doeltemperatuur"
+    name: "Целева температура за БГВ"
     id: sww_target
     register_type: holding
     address: 8
@@ -375,7 +419,7 @@ sensor:
     update_interval: 30s
     icon: mdi:delta
   - platform: template
-    name: "Corrected retour"
+    name: "коригираната стойност на връщащата вода"
     id: corrected_water_temp_retour
     device_class: "temperature"
     unit_of_measurement: "°C"
@@ -397,7 +441,7 @@ sensor:
     update_interval: 30s
     icon: mdi:thermometer-chevron-down
   - platform: template
-    name: "Corrected aanvoer"
+    name: "Коригирана t на подаване"
     id: corrected_water_temp_aanvoer
     device_class: "temperature"
     unit_of_measurement: "°C"
@@ -408,7 +452,7 @@ sensor:
     update_interval: 30s
     icon: mdi:thermometer-chevron-up
   - platform: template
-    name: "Rounded Corrected aanvoer"
+    name: "Закръглена коригирана t на подаване"
     id: rounded_corrected_water_temp_aanvoer
     device_class: "temperature"
     unit_of_measurement: "°C"
@@ -419,12 +463,18 @@ sensor:
     update_interval: 30s
     icon: mdi:thermometer-chevron-up
 
-number:
-  - platform: modbus_controller
-    modbus_controller_id: lg
-    id: water_temp_target_output
-    register_type: holding
-    address: 2
-    value_type: U_WORD
-    step: 0.1
-    multiply: 10
+text_sensor:
+  - platform: template
+    name: "Режим на работа"
+    lambda: |-
+      if (id(bedrijfsmodus).state == 0) {
+        return {"Стоп"};
+      } else if (id(bedrijfsmodus).state == 2) {
+        return {"Отопление"};
+      } else if (id(bedrijfsmodus).state == 1) {
+        return {"Охлаждане"};
+      } else {
+        return {"Неизвестно"};
+      }
+    update_interval: 30s
+    icon: mdi:information-outline
